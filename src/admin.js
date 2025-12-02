@@ -1,43 +1,66 @@
 const admin = require('firebase-admin');
-const dotenv = require('dotenv');
-const fs = require('fs');
-const path = require('path');
 
-dotenv.config();
+let db = null;
 
-// Initialize Firebase Admin SDK
-// Try to load from GOOGLE_APPLICATION_CREDENTIALS env var (service account JSON)
-// If not available, use applicationDefault() credentials (from gcloud or GOOGLE_APPLICATION_CREDENTIALS env)
-let credential;
-try {
-  const credsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (credsPath && fs.existsSync(credsPath)) {
-    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-    // Verify it's a valid service account (not a Web config)
-    if (creds.private_key && creds.client_email) {
-      credential = admin.credential.cert(creds);
-      console.log('Loaded Firebase service account from', credsPath);
-    } else {
-      throw new Error('File is not a valid service account (missing private_key or client_email)');
+// Method 1: Vercel environment variable (PRIORITY)
+if (process.env.FIREBASE_CREDENTIALS_BASE64) {
+  try {
+    if (!admin.apps.length) {
+      const serviceAccount = JSON.parse(
+        Buffer.from(process.env.FIREBASE_CREDENTIALS_BASE64, 'base64').toString()
+      );
+      
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        projectId: serviceAccount.project_id,
+        storageBucket: `${serviceAccount.project_id}.appspot.com`
+      });
+      
+      console.log('✅ Firebase initialized from FIREBASE_CREDENTIALS_BASE64 (Vercel)');
     }
-  } else {
-    // Fall back to application default credentials (gcloud auth, environment variables, etc.)
-    credential = admin.credential.applicationDefault();
-    console.log('Using Firebase applicationDefault() credentials');
+    
+    db = admin.firestore();
+    console.log('✅ Firestore initialized successfully');
+    
+  } catch (error) {
+    console.error('❌ Firebase initialization error from FIREBASE_CREDENTIALS_BASE64:', error.message);
   }
-} catch (err) {
-  console.error('Firebase initialization error:', err.message);
-  console.error('To fix: Download a service account key from Firebase Console > Project Settings > Service Accounts > Generate New Private Key');
-  console.error('Place it at the path specified in GOOGLE_APPLICATION_CREDENTIALS env var (default: ./serviceAccountKey.json)');
-  process.exit(1);
 }
-
-admin.initializeApp({
-  credential,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
-});
-
-const db = admin.firestore();
+// Method 2: Local development with serviceAccountKey.json
+else if (process.env.NODE_ENV !== 'production') {
+  try {
+    if (!admin.apps.length) {
+      // Use dynamic import to avoid crashing if file doesn't exist
+      const fs = require('fs');
+      const path = require('path');
+      const keyPath = path.join(__dirname, '../serviceAccountKey.json');
+      
+      if (fs.existsSync(keyPath)) {
+        const serviceAccount = require(keyPath);
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+          projectId: serviceAccount.project_id,
+          storageBucket: `${serviceAccount.project_id}.appspot.com`
+        });
+        console.log('✅ Firebase initialized from serviceAccountKey.json (Local)');
+      } else {
+        console.log('⚠️  serviceAccountKey.json not found. Running without Firebase.');
+      }
+    }
+    
+    if (admin.apps.length > 0) {
+      db = admin.firestore();
+      console.log('✅ Firestore initialized successfully');
+    }
+    
+  } catch (error) {
+    console.error('❌ Firebase local initialization error:', error.message);
+  }
+}
+// Method 3: Production without credentials
+else {
+  console.log('⚠️  No Firebase credentials found. Running without Firebase.');
+  console.log('ℹ️  Add FIREBASE_CREDENTIALS_BASE64 environment variable in Vercel');
+}
 
 module.exports = { admin, db };
