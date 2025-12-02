@@ -1,0 +1,8 @@
+node_modules
+.git
+.env.local
+*.log
+test
+coverage
+serviceAccountKey.json
+firebase-admin.json
