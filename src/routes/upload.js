@@ -1,18 +1,32 @@
+// src/routes/upload.js
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { admin, db } = require('../admin');
 const { validateFileUpload } = require('../middleware/validation');
 
-// Configure multer for file upload
+// Use explicit env var if provided, otherwise use serverless tmp dir
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(os.tmpdir(), 'uploads');
+
+// Ensure upload directory exists, but don't crash if it fails
+try {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  console.log('Upload directory ready:', UPLOAD_DIR);
+} catch (err) {
+  console.warn('Could not create upload directory (falling back). Error:', err && err.message);
+}
+
+// Configure multer for file upload to UPLOAD_DIR
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/')
+    cb(null, UPLOAD_DIR);
   },
   filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname))
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 
@@ -42,10 +56,11 @@ const upload = multer({
   }
 });
 
-// Ensure uploads directory exists
-const fs = require('fs');
-if (!fs.existsSync('uploads')) {
-  fs.mkdirSync('uploads', { recursive: true });
+// Helper: build public URL for returned file path (note: ephemeral on serverless)
+function buildFileUrl(filename) {
+  // If you serve uploads in dev via server.static, URLs will be /uploads/<name>
+  // In production, this is ephemeral — consider uploading to Firebase Storage / S3.
+  return `/uploads/${filename}`;
 }
 
 // POST /api/upload/resume - Upload resume
@@ -54,16 +69,12 @@ router.post('/resume', upload.single('resume'), validateFileUpload, async (req, 
     const userId = req.user.uid;
     
     if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: 'No file uploaded'
-      });
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
     
-    // Create file URL (in production, you'd upload to cloud storage)
-    const fileUrl = `/uploads/${req.file.filename}`;
+    const fileUrl = buildFileUrl(req.file.filename);
     
-    // Update user's resume URL
+    // Update user's resume URL in Firestore
     await db.collection('users').doc(userId).update({
       resumeUrl: fileUrl,
       resumeFileName: req.file.originalname,
@@ -84,12 +95,9 @@ router.post('/resume', upload.single('resume'), validateFileUpload, async (req, 
     });
   } catch (error) {
     console.error('Upload resume error:', error);
-    
-    // Delete uploaded file if error occurred
     if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+      try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
     }
-    
     res.status(500).json({
       success: false,
       error: 'Failed to upload resume',
@@ -104,27 +112,16 @@ router.post('/profile-picture', upload.single('profilePicture'), async (req, res
     const userId = req.user.uid;
     
     if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: 'No file uploaded'
-      });
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
     
-    // Check if file is an image
     if (!req.file.mimetype.startsWith('image/')) {
-      // Delete uploaded file
-      fs.unlinkSync(req.file.path);
-      
-      return res.status(400).json({
-        success: false,
-        error: 'Only image files are allowed'
-      });
+      if (fs.existsSync(req.file.path)) { try { fs.unlinkSync(req.file.path); } catch (e) {} }
+      return res.status(400).json({ success: false, error: 'Only image files are allowed' });
     }
     
-    // Create file URL
-    const fileUrl = `/uploads/${req.file.filename}`;
+    const fileUrl = buildFileUrl(req.file.filename);
     
-    // Update user's profile picture URL
     await db.collection('users').doc(userId).update({
       profilePicture: fileUrl,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -142,12 +139,9 @@ router.post('/profile-picture', upload.single('profilePicture'), async (req, res
     });
   } catch (error) {
     console.error('Upload profile picture error:', error);
-    
-    // Delete uploaded file if error occurred
     if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
     }
-    
     res.status(500).json({
       success: false,
       error: 'Failed to upload profile picture',
@@ -160,28 +154,20 @@ router.post('/profile-picture', upload.single('profilePicture'), async (req, res
 router.delete('/resume', async (req, res) => {
   try {
     const userId = req.user.uid;
-    
-    // Get current user data
     const userDoc = await db.collection('users').doc(userId).get();
     const userData = userDoc.data();
     
-    if (!userData.resumeUrl) {
-      return res.status(400).json({
-        success: false,
-        error: 'No resume found'
-      });
+    if (!userData || !userData.resumeUrl) {
+      return res.status(400).json({ success: false, error: 'No resume found' });
     }
     
-    // Extract filename from URL
     const fileName = userData.resumeUrl.split('/').pop();
-    const filePath = path.join('uploads', fileName);
+    const filePath = path.join(UPLOAD_DIR, fileName);
     
-    // Delete file from filesystem
     if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+      try { fs.unlinkSync(filePath); } catch (e) { console.warn('Failed to delete file:', e.message); }
     }
     
-    // Remove resume data from user document
     await db.collection('users').doc(userId).update({
       resumeUrl: null,
       resumeFileName: null,
@@ -190,17 +176,10 @@ router.delete('/resume', async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
     
-    res.json({
-      success: true,
-      message: 'Resume deleted successfully'
-    });
+    res.json({ success: true, message: 'Resume deleted successfully' });
   } catch (error) {
     console.error('Delete resume error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to delete resume',
-      message: error.message
-    });
+    res.status(500).json({ success: false, error: 'Failed to delete resume', message: error.message });
   }
 });
 
@@ -208,13 +187,11 @@ router.delete('/resume', async (req, res) => {
 router.get('/files', async (req, res) => {
   try {
     const userId = req.user.uid;
-    
     const userDoc = await db.collection('users').doc(userId).get();
     const userData = userDoc.data();
-    
     const files = [];
     
-    if (userData.resumeUrl) {
+    if (userData && userData.resumeUrl) {
       files.push({
         type: 'resume',
         url: userData.resumeUrl,
@@ -224,7 +201,7 @@ router.get('/files', async (req, res) => {
       });
     }
     
-    if (userData.profilePicture) {
+    if (userData && userData.profilePicture) {
       files.push({
         type: 'profilePicture',
         url: userData.profilePicture,
@@ -233,22 +210,11 @@ router.get('/files', async (req, res) => {
       });
     }
     
-    res.json({
-      success: true,
-      files,
-      total: files.length
-    });
+    res.json({ success: true, files, total: files.length });
   } catch (error) {
     console.error('Get files error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch files',
-      message: error.message
-    });
+    res.status(500).json({ success: false, error: 'Failed to fetch files', message: error.message });
   }
 });
-
-// Serve uploaded files statically
-// Add this to your server.js: app.use('/uploads', express.static('uploads'));
 
 module.exports = router;

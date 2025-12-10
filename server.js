@@ -48,6 +48,15 @@ const uploadRoutes = require('./src/routes/upload');
 
 const app = express();
 
+if (process.env.NODE_ENV !== 'production') {
+  const localUploads = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
+  app.use('/uploads', express.static(localUploads));
+  console.log('Serving uploads from (dev):', localUploads);
+} else {
+  console.log('Not serving local uploads in production. Use cloud storage or set UPLOAD_DIR.');
+}
+
+
 // Apply global rate limiting to API routes
 app.use('/api/', apiLimiter);
 
