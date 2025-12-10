@@ -1,126 +1,227 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
 
-// Load environment variables - only for local development
-if (process.env.NODE_ENV !== 'production') {
-  require('dotenv').config({ path: '.env.local' });
-}
+// ============================================
+// 1. Load Environment Variables
+// ============================================
+
+console.log('=== JOB PORTAL BACKEND STARTING ===');
+console.log('Server file:', __filename);
+
+// Load .env file
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+// Debug environment
+console.log('Environment loaded:', {
+  firebaseApiKey: process.env.FIREBASE_API_KEY ? '✅ Set' : '❌ Missing',
+  port: process.env.PORT || 3000,
+  nodeEnv: process.env.NODE_ENV || 'development'
+});
+
+// ============================================
+// 2. Import Dependencies
+// ============================================
 
 const { admin, db } = require('./src/admin');
 
+// Middleware
+const { authMiddleware } = require('./src/middleware/auth');
+const { requireRole } = require('./src/middleware/roles');
+const { apiLimiter } = require('./src/middleware/rateLimit');
+
+// Routes
 const authRoutes = require('./src/routes/auth');
 const jobsRoutes = require('./src/routes/jobs');
 const adminJobsRoutes = require('./src/routes/adminJobs');
+const adminUsersRoutes = require('./src/routes/adminUsers');
+const adminApplicationsRoutes = require('./src/routes/adminApplications');
 const applyRoutes = require('./src/routes/apply');
 const favouritesRoutes = require('./src/routes/favourites');
 const usersRoutes = require('./src/routes/users');
 const uploadRoutes = require('./src/routes/upload');
 
-const { authMiddleware } = require('./src/middleware/auth');
-const { requireRole } = require('./src/middleware/roles');
+// ============================================
+// 3. Initialize Express App
+// ============================================
 
 const app = express();
 
+// Apply global rate limiting to API routes
+app.use('/api/', apiLimiter);
+
 // CORS configuration
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001', 'https://your-frontend.vercel.app'],
-  credentials: true
+  origin: ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:8080'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Health check endpoint (for Vercel monitoring)
-app.get('/api/health', (req, res) => {
+// Serve uploaded files
+app.use('/uploads', express.static('uploads'));
+
+// ============================================
+// 4. Health Check & Info Endpoints
+// ============================================
+
+app.get('/', (req, res) => {
   res.json({ 
-    status: 'OK', 
-    message: 'Jobboard backend is running',
-    timestamp: new Date().toISOString(),
-    firebase: db ? 'connected' : 'not connected'
+    success: true,
+    message: 'Job Portal Backend API',
+    version: '1.0.0',
+    documentation: {
+      authentication: '/api/auth',
+      jobs: '/api/jobs',
+      applications: '/api/apply',
+      favorites: '/api/favourites',
+      user: '/api/users/me',
+      uploads: '/api/upload',
+      admin: '/api/admin/jobs'
+    },
+    health: '/api/health',
+    status: 'operational'
   });
 });
 
-// Firebase test endpoint
-app.get('/api/test-firebase', async (req, res) => {
-  try {
-    if (!db) {
-      return res.status(503).json({ 
-        status: 'ERROR', 
-        message: 'Firebase not initialized. Check FIREBASE_CREDENTIALS_BASE64 env var.' 
-      });
-    }
-    
-    // Test Firestore connection
-    const testRef = db.collection('test').doc('connection');
-    await testRef.set({
-      test: 'success',
-      timestamp: new Date().toISOString(),
-      server: 'vercel'
-    });
-    
-    const doc = await testRef.get();
-    
-    res.json({
-      status: 'SUCCESS',
-      message: 'Firestore is working!',
-      data: doc.exists ? doc.data() : null
-    });
-    
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'ERROR', 
-      message: 'Firebase test failed',
-      error: error.message 
-    });
-  }
+app.get('/api/health', (req, res) => {
+  const health = {
+    success: true,
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    firebase: db ? 'connected' : 'disconnected',
+    memory: process.memoryUsage(),
+    environment: process.env.NODE_ENV || 'development'
+  };
+  
+  res.json(health);
 });
 
-// Public route
-app.get('/', (req, res) => res.json({ 
-  message: 'Jobboard Backend API',
-  endpoints: {
-    health: '/api/health',
-    test: '/api/test-firebase',
-    auth: '/api/auth',
-    jobs: '/api/jobs',
-    apply: '/api/apply',
-    favourites: '/api/favourites',
-    upload: '/api/upload',
-    admin: '/api/admin/jobs'
-  }
-}));
+app.get('/api/info', (req, res) => {
+  res.json({
+    success: true,
+    name: 'Job Portal API',
+    version: '1.0.0',
+    description: 'Backend API for Job Portal Application',
+    features: [
+      'User authentication & registration',
+      'Job posting & management',
+      'Job search with filters',
+      'Application system',
+      'Favorite jobs',
+      'User profiles',
+      'Resume upload',
+      'Admin dashboard',
+      'Analytics & statistics'
+    ],
+    technologies: ['Node.js', 'Express', 'Firebase', 'Firestore']
+  });
+});
 
-// Auth routes
-app.use('/api/auth', authRoutes);
+// ============================================
+// 5. Route Configuration
+// ============================================
 
-// Jobs (public read)
+// Public routes
+app.use('/api/auth', authRoutes); // public routes
 app.use('/api/jobs', jobsRoutes);
 
-// Protected actions
+// Protected routes (require authentication)
 app.use('/api/apply', authMiddleware, applyRoutes);
 app.use('/api/favourites', authMiddleware, favouritesRoutes);
-app.use('/api/me', authMiddleware, usersRoutes);
 app.use('/api/upload', authMiddleware, uploadRoutes);
 
-// Admin routes (protected + role)
+// User profile routes
+app.use('/api/users', authMiddleware, usersRoutes);
+
+// Admin routes (require admin role)
 app.use('/api/admin/jobs', authMiddleware, requireRole('admin'), adminJobsRoutes);
+app.use('/api/admin/users', authMiddleware, requireRole('admin'), adminUsersRoutes);
+app.use('/api/admin/applications', authMiddleware, requireRole('admin'), adminApplicationsRoutes);
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
-});
 
-// 404 handler
+
+// ============================================
+// 6. Error Handling Middleware
+// ============================================
+
+// 404 Not Found handler
 app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
+  res.status(404).json({ 
+    success: false,
+    error: 'Endpoint not found',
+    path: req.path,
+    method: req.method
+  });
 });
 
-// Export for Vercel
-module.exports = app;
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('Server Error:', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method
+  });
 
-// Only listen locally when not in Vercel environment
+  // Multer file size error
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      success: false,
+      error: 'File size too large. Maximum size is 5MB.'
+    });
+  }
+
+  // Multer file type error
+  if (err.message && err.message.includes('Invalid file type')) {
+    return res.status(400).json({
+      success: false,
+      error: err.message
+    });
+  }
+
+  // Default error response
+  const statusCode = err.statusCode || 500;
+  const errorMessage = process.env.NODE_ENV === 'production' 
+    ? 'Internal server error' 
+    : err.message;
+
+  res.status(statusCode).json({
+    success: false,
+    error: errorMessage,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
+
+// ============================================
+// 7. Start Server
+// ============================================
+
+const PORT = process.env.PORT || 3000;
+
+// Only start server if not in test environment
 if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+  app.listen(PORT, () => {
+    // Add to server.js to debug Firebase
+console.log('Firebase db initialized:', !!db);
+console.log('Firebase admin initialized:', !!admin);
+    console.log('================================');
+    console.log(`✅ Server running on port ${PORT}`);
+    console.log(`✅ Firebase: ${db ? 'Connected' : 'Not connected'}`);
+    console.log(`✅ Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log('================================');
+    console.log('Available endpoints:');
+    console.log(`  http://localhost:${PORT}/api/health`);
+    console.log(`  http://localhost:${PORT}/api/auth/debug`);
+    console.log(`  http://localhost:${PORT}/api/jobs`);
+    console.log('================================');
+  });
 }
+
+module.exports = app;
