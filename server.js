@@ -55,7 +55,12 @@ if (process.env.NODE_ENV !== 'production') {
 } else {
   console.log('Not serving local uploads in production. Use cloud storage or set UPLOAD_DIR.');
 }
+app.set('trust proxy', true);
 
+app.use((req, res, next) => {
+  console.log('req.ip =', req.ip, 'x-forwarded-for =', req.headers['x-forwarded-for']);
+  next();
+});
 
 // Apply global rate limiting to API routes
 app.use('/api/', apiLimiter);
@@ -116,7 +121,7 @@ app.get('/api/info', (req, res) => {
   res.json({
     success: true,
     name: 'Job Portal API',
-    version: '1.0.0',
+    version: '2.0.0',
     description: 'Backend API for Job Portal Application',
     features: [
       'User authentication & registration',
