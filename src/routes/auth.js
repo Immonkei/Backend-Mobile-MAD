@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { admin, db } = require('../admin');
-const { authLimiter } = require('../middleware/rateLimit');
 const { authMiddleware } = require('../middleware/auth'); // Import middleware
 
 
@@ -15,7 +14,7 @@ router.get('/debug', (req, res) => {
 });
 
 // POST /api/auth/register
-router.post('/register', authLimiter, async (req, res) => {
+router.post('/register', async (req, res) => {
   try {
     const { email, password, fullName, phone } = req.body;
 
@@ -111,7 +110,7 @@ router.post('/register', authLimiter, async (req, res) => {
 });
 
 // POST /api/auth/login (WORKING VERSION)
-router.post('/login', authLimiter, async (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     

@@ -2,11 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { admin, db } = require('../admin');
 const { validateFileUpload } = require('../middleware/validation');
-const { applyLimiter } = require('../middleware/rateLimit');
 
 
 // POST /api/apply/:jobId/apply - Apply for a job
-router.post('/:jobId/apply', applyLimiter, async (req, res) => {
+router.post('/:jobId/apply', async (req, res) => {
   try {
     const jobId = req.params.jobId;
     const userId = req.user.uid;

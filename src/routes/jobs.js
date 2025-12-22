@@ -2,10 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { admin, db } = require('../admin');
 const { validateJobPost } = require('../middleware/validation');
-const { apiLimiter } = require('../middleware/rateLimit');
 
-// Apply rate limiting
-router.use(apiLimiter);
 
 // GET /api/jobs - Get all jobs with filters
 router.get('/', async (req, res) => {

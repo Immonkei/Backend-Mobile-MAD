@@ -29,7 +29,6 @@ const { admin, db } = require('./src/admin');
 // Middleware
 const { authMiddleware } = require('./src/middleware/auth');
 const { requireRole } = require('./src/middleware/roles');
-const { apiLimiter } = require('./src/middleware/rateLimit');
 
 // Routes
 const authRoutes = require('./src/routes/auth');
@@ -62,8 +61,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Apply global rate limiting to API routes
-app.use('/api/', apiLimiter);
 
 // CORS configuration
 app.use(cors({
