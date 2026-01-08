@@ -40,7 +40,6 @@ router.get('/', async (req, res) => {
       limit = 50,
       sortBy = 'createdAt',
       order = 'desc',
-      showDeleted = false
     } = req.query;
 
     let query = db.collection('users');
@@ -48,10 +47,6 @@ router.get('/', async (req, res) => {
     // Apply filters
     if (role) {
       query = query.where('role', '==', role);
-    }
-
-     if (showDeleted !== 'true') {
-      query = query.where('isDeleted', '==', false);
     }
 
     if (verified !== undefined) {

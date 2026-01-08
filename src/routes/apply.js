@@ -1,32 +1,30 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { admin, db } = require('../admin');
-const { validateFileUpload } = require('../middleware/validation');
-
+const { admin, db } = require("../admin");
+const { validateFileUpload } = require("../middleware/validation");
 
 // POST /api/apply/:jobId/apply - Apply for a job
-router.post('/:jobId/apply', async (req, res) => {
+router.post("/:jobId/apply", async (req, res) => {
   try {
     const jobId = req.params.jobId;
     const userId = req.user.uid;
-    const { coverLetter, additionalInfo } = req.body;
-
+    const { coverLetter, additionalInfo, userNotes } = req.body;
     // Check if job exists
-    const jobDoc = await db.collection('jobs').doc(jobId).get();
+    const jobDoc = await db.collection("jobs").doc(jobId).get();
     if (!jobDoc.exists) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        error: 'Job not found' 
+        error: "Job not found",
       });
     }
 
     const jobData = jobDoc.data();
-    
+
     // Check if job is accepting applications
-    if (jobData.status !== 'published') {
-      return res.status(400).json({ 
+    if (jobData.status !== "published") {
+      return res.status(400).json({
         success: false,
-        error: 'This job is no longer accepting applications' 
+        error: "This job is no longer accepting applications",
       });
     }
 
@@ -34,45 +32,46 @@ router.post('/:jobId/apply', async (req, res) => {
     if (jobData.applicationDeadline) {
       const deadline = new Date(jobData.applicationDeadline);
       if (deadline < new Date()) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           success: false,
-          error: 'Application deadline has passed' 
+          error: "Application deadline has passed",
         });
       }
     }
 
     // Check if user has already applied
-    const existingAppQuery = await db.collection('applications')
-      .where('jobId', '==', jobId)
-      .where('userId', '==', userId)
+    const existingAppQuery = await db
+      .collection("applications")
+      .where("jobId", "==", jobId)
+      .where("userId", "==", userId)
       .limit(1)
       .get();
-    
+
     if (!existingAppQuery.empty) {
       const existingApp = existingAppQuery.docs[0].data();
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        error: 'You have already applied to this job',
+        error: "You have already applied to this job",
         applicationId: existingAppQuery.docs[0].id,
         status: existingApp.status,
-        appliedAt: existingApp.appliedAt
+        appliedAt: existingApp.appliedAt,
       });
     }
 
     // Get user's resume
-    const userDoc = await db.collection('users').doc(userId).get();
+    const userDoc = await db.collection("users").doc(userId).get();
     const userData = userDoc.data();
-    
+
     if (!userData.resumeUrl) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        error: 'Please upload a resume before applying',
-        suggestion: 'Use POST /api/upload/resume to upload your resume'
+        error: "Please upload a resume before applying",
+        suggestion: "Use POST /api/upload/resume to upload your resume",
       });
     }
 
     // Create application
-    const appRef = db.collection('applications').doc();
+    const appRef = db.collection("applications").doc();
     const applicationData = {
       jobId,
       userId,
@@ -80,74 +79,194 @@ router.post('/:jobId/apply', async (req, res) => {
       jobCompany: jobData.company,
       userName: userData.fullName || userData.email,
       userEmail: userData.email,
-      userPhone: userData.phone || '',
+      userPhone: userData.phone || "",
       resumeUrl: userData.resumeUrl,
-      coverLetter: coverLetter || '',
+      coverLetter: coverLetter || "",
       additionalInfo: additionalInfo || {},
-      status: 'pending',
-      stage: 'applied',
+      status: "pending",
+      stage: "applied",
       appliedAt: admin.firestore.FieldValue.serverTimestamp(),
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
       viewedByAdmin: false,
-      notes: ''
+      notes: {
+        userNotes: userNotes || "", // Add this
+        adminNotes: [], // Initialize empty array
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      },
     };
 
     await appRef.set(applicationData);
 
     // Update job applicants count
-    await db.collection('jobs').doc(jobId).update({
-      applicantsCount: admin.firestore.FieldValue.increment(1),
-      lastApplicationAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    await db
+      .collection("jobs")
+      .doc(jobId)
+      .update({
+        applicantsCount: admin.firestore.FieldValue.increment(1),
+        lastApplicationAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
 
     // Update user's application count
-    await db.collection('users').doc(userId).update({
-      applicationsCount: admin.firestore.FieldValue.increment(1),
-      lastAppliedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    await db
+      .collection("users")
+      .doc(userId)
+      .update({
+        applicationsCount: admin.firestore.FieldValue.increment(1),
+        lastAppliedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
 
     // TODO: Send notifications
 
     res.json({
       success: true,
-      message: 'Application submitted successfully',
+      message: "Application submitted successfully",
       applicationId: appRef.id,
       appliedAt: new Date().toISOString(),
-      nextSteps: 'Your application is under review. You will be notified of any updates.'
+      nextSteps:
+        "Your application is under review. You will be notified of any updates.",
     });
   } catch (error) {
-    console.error('Application error:', error);
-    res.status(500).json({ 
+    console.error("Application error:", error);
+    res.status(500).json({
       success: false,
-      error: 'Failed to submit application',
-      message: error.message 
+      error: "Failed to submit application",
+      message: error.message,
+    });
+  }
+});
+
+// 1. POST /api/apply/:applicationId/notes - User adds/updates notes
+router.post("/:applicationId/notes", async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { applicationId } = req.params;
+    const { notes } = req.body;
+
+    if (!notes || notes.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        error: "Notes content is required",
+      });
+    }
+
+    const appDoc = await db.collection("applications").doc(applicationId).get();
+
+    if (!appDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        error: "Application not found",
+      });
+    }
+
+    const appData = appDoc.data();
+
+    // Check if user owns the application
+    if (appData.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: "Not authorized to update notes for this application",
+      });
+    }
+
+    // Update notes
+    await db.collection("applications").doc(applicationId).update({
+      "notes.userNotes": notes.trim(),
+      "notes.lastUpdated": admin.firestore.FieldValue.serverTimestamp(),
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.json({
+      success: true,
+      message: "Notes updated successfully",
+      applicationId,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Update user notes error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to update notes",
+      message: error.message,
+    });
+  }
+});
+
+// 2. GET /api/apply/:applicationId/notes - User views notes
+router.get("/:applicationId/notes", async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { applicationId } = req.params;
+
+    const appDoc = await db.collection("applications").doc(applicationId).get();
+
+    if (!appDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        error: "Application not found",
+      });
+    }
+
+    const appData = appDoc.data();
+
+    // Check if user owns the application
+    if (appData.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: "Not authorized to view notes for this application",
+      });
+    }
+
+    // Return notes visible to user
+    const userNotes = {
+      userNotes: appData.notes?.userNotes || "",
+      // Only show admin notes that are not internal
+      adminNotes:
+        appData.notes?.adminNotes?.filter((note) => !note.isInternal) || [],
+      lastUpdated: appData.notes?.lastUpdated,
+    };
+
+    res.json({
+      success: true,
+      notes: userNotes,
+      applicationId,
+      canRespond: ["pending", "reviewed", "shortlisted"].includes(
+        appData.status
+      ),
+    });
+  } catch (error) {
+    console.error("Get user notes error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch notes",
+      message: error.message,
     });
   }
 });
 
 // GET /api/apply/check/:jobId - Check if already applied
-router.get('/check/:jobId', async (req, res) => {
+router.get("/check/:jobId", async (req, res) => {
   try {
     const userId = req.user.uid;
     const jobId = req.params.jobId;
 
-    const query = await db.collection('applications')
-      .where('jobId', '==', jobId)
-      .where('userId', '==', userId)
+    const query = await db
+      .collection("applications")
+      .where("jobId", "==", jobId)
+      .where("userId", "==", userId)
       .limit(1)
       .get();
-    
+
     if (query.empty) {
       return res.json({
         success: true,
         hasApplied: false,
-        canApply: true
+        canApply: true,
       });
     }
 
     const appDoc = query.docs[0];
     const appData = appDoc.data();
-    
+
     res.json({
       success: true,
       hasApplied: true,
@@ -155,56 +274,56 @@ router.get('/check/:jobId', async (req, res) => {
       status: appData.status,
       appliedAt: appData.appliedAt,
       canApply: false,
-      message: 'You have already applied to this job'
+      message: "You have already applied to this job",
     });
   } catch (error) {
-    console.error('Check application error:', error);
-    res.status(500).json({ 
+    console.error("Check application error:", error);
+    res.status(500).json({
       success: false,
-      error: 'Failed to check application status',
-      message: error.message 
+      error: "Failed to check application status",
+      message: error.message,
     });
   }
 });
 
 // GET /api/apply - Get my applications
-router.get('/', async (req, res) => {
+router.get("/", async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { 
-      status, 
-      page = 1, 
+    const {
+      status,
+      page = 1,
       limit = 20,
-      sortBy = 'appliedAt',
-      order = 'desc'
+      sortBy = "appliedAt",
+      order = "desc",
     } = req.query;
 
-    let query = db.collection('applications')
-      .where('userId', '==', userId);
+    let query = db.collection("applications").where("userId", "==", userId);
 
     if (status) {
-      query = query.where('status', '==', status);
+      query = query.where("status", "==", status);
     }
 
     // Sorting
-    if (sortBy === 'appliedAt') {
-      query = order === 'asc' 
-        ? query.orderBy('appliedAt', 'asc')
-        : query.orderBy('appliedAt', 'desc');
+    if (sortBy === "appliedAt") {
+      query =
+        order === "asc"
+          ? query.orderBy("appliedAt", "asc")
+          : query.orderBy("appliedAt", "desc");
     }
 
     const snapshot = await query.get();
     const total = snapshot.size;
     const startAt = (page - 1) * limit;
-    
+
     const applications = [];
     let count = 0;
-    
-    snapshot.forEach(doc => {
+
+    snapshot.forEach((doc) => {
       if (count >= startAt && applications.length < limit) {
         applications.push({
           id: doc.id,
-          ...doc.data()
+          ...doc.data(),
         });
       }
       count++;
@@ -214,7 +333,7 @@ router.get('/', async (req, res) => {
     const applicationsWithDetails = await Promise.all(
       applications.map(async (app) => {
         try {
-          const jobDoc = await db.collection('jobs').doc(app.jobId).get();
+          const jobDoc = await db.collection("jobs").doc(app.jobId).get();
           if (jobDoc.exists) {
             const jobData = jobDoc.data();
             app.job = {
@@ -223,7 +342,7 @@ router.get('/', async (req, res) => {
               company: jobData.company,
               location: jobData.location,
               type: jobData.type,
-              status: jobData.status
+              status: jobData.status,
             };
           }
         } catch (error) {
@@ -244,10 +363,10 @@ router.get('/', async (req, res) => {
       interview: 0,
       accepted: 0,
       rejected: 0,
-      withdrawn: 0
+      withdrawn: 0,
     };
 
-    snapshot.forEach(doc => {
+    snapshot.forEach((doc) => {
       const appData = doc.data();
       if (statusCounts[appData.status] !== undefined) {
         statusCounts[appData.status]++;
@@ -263,35 +382,35 @@ router.get('/', async (req, res) => {
         totalItems: total,
         hasNextPage: page < totalPages,
         hasPrevPage: page > 1,
-        limit: Number(limit)
+        limit: Number(limit),
       },
       summary: {
         total,
-        ...statusCounts
-      }
+        ...statusCounts,
+      },
     });
   } catch (error) {
-    console.error('Get applications error:', error);
-    res.status(500).json({ 
+    console.error("Get applications error:", error);
+    res.status(500).json({
       success: false,
-      error: 'Failed to fetch applications',
-      message: error.message 
+      error: "Failed to fetch applications",
+      message: error.message,
     });
   }
 });
 
 // GET /api/apply/:applicationId - Get single application
-router.get('/:applicationId', async (req, res) => {
+router.get("/:applicationId", async (req, res) => {
   try {
     const userId = req.user.uid;
     const { applicationId } = req.params;
 
-    const appDoc = await db.collection('applications').doc(applicationId).get();
-    
+    const appDoc = await db.collection("applications").doc(applicationId).get();
+
     if (!appDoc.exists) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        error: 'Application not found' 
+        error: "Application not found",
       });
     }
 
@@ -299,16 +418,16 @@ router.get('/:applicationId', async (req, res) => {
 
     // Check if user owns the application
     if (appData.userId !== userId) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         success: false,
-        error: 'Not authorized to view this application' 
+        error: "Not authorized to view this application",
       });
     }
 
     // Get job details
-    const jobDoc = await db.collection('jobs').doc(appData.jobId).get();
+    const jobDoc = await db.collection("jobs").doc(appData.jobId).get();
     let jobDetails = null;
-    
+
     if (jobDoc.exists) {
       const jobData = jobDoc.data();
       jobDetails = {
@@ -319,7 +438,7 @@ router.get('/:applicationId', async (req, res) => {
         type: jobData.type,
         description: jobData.description,
         salary: jobData.salary,
-        requirements: jobData.requirements
+        requirements: jobData.requirements,
       };
     }
 
@@ -328,32 +447,34 @@ router.get('/:applicationId', async (req, res) => {
       application: {
         id: appDoc.id,
         ...appData,
-        job: jobDetails
+        job: jobDetails,
       },
-      canWithdraw: ['pending', 'reviewed', 'shortlisted'].includes(appData.status)
+      canWithdraw: ["pending", "reviewed", "shortlisted"].includes(
+        appData.status
+      ),
     });
   } catch (error) {
-    console.error('Get application error:', error);
-    res.status(500).json({ 
+    console.error("Get application error:", error);
+    res.status(500).json({
       success: false,
-      error: 'Failed to fetch application',
-      message: error.message 
+      error: "Failed to fetch application",
+      message: error.message,
     });
   }
 });
 
 // DELETE /api/apply/:applicationId - Withdraw application
-router.delete('/:applicationId', async (req, res) => {
+router.delete("/:applicationId", async (req, res) => {
   try {
     const userId = req.user.uid;
     const { applicationId } = req.params;
 
-    const appDoc = await db.collection('applications').doc(applicationId).get();
-    
+    const appDoc = await db.collection("applications").doc(applicationId).get();
+
     if (!appDoc.exists) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        error: 'Application not found' 
+        error: "Application not found",
       });
     }
 
@@ -361,27 +482,27 @@ router.delete('/:applicationId', async (req, res) => {
 
     // Check if user owns the application
     if (appData.userId !== userId) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         success: false,
-        error: 'Not authorized to withdraw this application' 
+        error: "Not authorized to withdraw this application",
       });
     }
 
     // Check if application can be withdrawn
-    const cannotWithdrawStatuses = ['accepted', 'hired'];
+    const cannotWithdrawStatuses = ["accepted", "hired"];
     if (cannotWithdrawStatuses.includes(appData.status)) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
         error: `Cannot withdraw application that has been ${appData.status}`,
-        allowedStatuses: ['pending', 'reviewed', 'shortlisted', 'rejected']
+        allowedStatuses: ["pending", "reviewed", "shortlisted", "rejected"],
       });
     }
 
     // Update status to withdrawn
-    await db.collection('applications').doc(applicationId).update({
-      status: 'withdrawn',
+    await db.collection("applications").doc(applicationId).update({
+      status: "withdrawn",
       withdrawnAt: admin.firestore.FieldValue.serverTimestamp(),
-      lastUpdated: admin.firestore.FieldValue.serverTimestamp()
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
     });
 
     // Decrement job applicants count (optional)
@@ -390,22 +511,25 @@ router.delete('/:applicationId', async (req, res) => {
     // });
 
     // Decrement user's application count
-    await db.collection('users').doc(userId).update({
-      applicationsCount: admin.firestore.FieldValue.increment(-1)
-    });
+    await db
+      .collection("users")
+      .doc(userId)
+      .update({
+        applicationsCount: admin.firestore.FieldValue.increment(-1),
+      });
 
     res.json({
       success: true,
-      message: 'Application withdrawn successfully',
+      message: "Application withdrawn successfully",
       applicationId,
-      withdrawnAt: new Date().toISOString()
+      withdrawnAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('Withdraw application error:', error);
-    res.status(500).json({ 
+    console.error("Withdraw application error:", error);
+    res.status(500).json({
       success: false,
-      error: 'Failed to withdraw application',
-      message: error.message 
+      error: "Failed to withdraw application",
+      message: error.message,
     });
   }
 });
