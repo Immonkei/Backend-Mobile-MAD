@@ -348,7 +348,7 @@ router.get("/:id", async (req, res) => {
 router.patch("/:id/status", async (req, res) => {
   try {
     const applicationId = req.params.id;
-    const { status, notes, nextStep, interviewDate } = req.body;
+    const { status, notes, nextStep, interviewDate, notifyUser = true } = req.body;
 
     if (!status) {
       return res.status(400).json({
@@ -406,7 +406,8 @@ router.patch("/:id/status", async (req, res) => {
         addedByName: req.user.email,
         isInternal: false,
         notifyUser: true,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+           timestamp: new Date(), 
+
         relatedStatus: status,
       };
 
@@ -430,7 +431,8 @@ router.patch("/:id/status", async (req, res) => {
       changedBy: req.user.uid,
       changedByName: req.user.email,
       notes: notes || "",
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+     timestamp: new Date(),
+
     };
 
     if (interviewDate && status === "interview") {
@@ -484,7 +486,6 @@ router.patch("/:id/status", async (req, res) => {
 });
 
 // PATCH /api/admin/applications/:id/notes - Add notes to application
-// PATCH /api/admin/applications/:id/notes - Add admin notes (with user visibility)
 router.patch("/:id/notes", async (req, res) => {
   try {
     const applicationId = req.params.id;
@@ -521,7 +522,7 @@ router.patch("/:id/notes", async (req, res) => {
     await applicationRef.update({
       "notes.adminNotes": admin.firestore.FieldValue.arrayUnion(noteData),
       "notes.lastUpdated": admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      timestamp: new Date(),
       updatedBy: req.user.uid,
     });
 
