@@ -348,7 +348,13 @@ router.get("/:id", async (req, res) => {
 router.patch("/:id/status", async (req, res) => {
   try {
     const applicationId = req.params.id;
-    const { status, notes, nextStep, interviewDate, notifyUser = true } = req.body;
+    const {
+      status,
+      notes,
+      nextStep,
+      interviewDate,
+      notifyUser = true,
+    } = req.body;
 
     if (!status) {
       return res.status(400).json({
@@ -399,14 +405,14 @@ router.patch("/:id/status", async (req, res) => {
     }
 
     // Add status change note that user can see
-    if (notes && notifyUser !== false) {
+    if (notes && notifyUser ) {
       const statusNote = {
         content: `Status changed to ${status}: ${notes}`,
         addedBy: req.user.uid,
         addedByName: req.user.email,
         isInternal: false,
         notifyUser: true,
-           timestamp: new Date(), 
+        timestamp: new Date(),
 
         relatedStatus: status,
       };
@@ -431,8 +437,7 @@ router.patch("/:id/status", async (req, res) => {
       changedBy: req.user.uid,
       changedByName: req.user.email,
       notes: notes || "",
-     timestamp: new Date(),
-
+      timestamp: new Date(),
     };
 
     if (interviewDate && status === "interview") {
@@ -515,16 +520,17 @@ router.patch("/:id/notes", async (req, res) => {
       addedByName: req.user.email,
       isInternal: isInternal === true,
       notifyUser: notifyUser === true,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      timestamp: new Date(),
     };
 
     // Add to adminNotes array
-    await applicationRef.update({
-      "notes.adminNotes": admin.firestore.FieldValue.arrayUnion(noteData),
-      "notes.lastUpdated": admin.firestore.FieldValue.serverTimestamp(),
-      timestamp: new Date(),
-      updatedBy: req.user.uid,
-    });
+ await applicationRef.update({
+  "notes.adminNotes": admin.firestore.FieldValue.arrayUnion(noteData),
+  "notes.lastUpdated": admin.firestore.FieldValue.serverTimestamp(),
+  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  updatedBy: req.user.uid,
+});
+
 
     res.json({
       success: true,
